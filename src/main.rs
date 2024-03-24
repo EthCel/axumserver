@@ -5,9 +5,10 @@ use axum::{
     Router,
 };
 use tower_http::limit::RequestBodyLimitLayer;
-use tracing_subscriber::{layer::SubscriberExt};
-use image::{imageops::FilterType, io::Reader as ImageReader, DynamicImage, ImageFormat};
-pub use self::multipart::Multipart;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use image::io::Reader as ImageReader;
+use std::io::Cursor;
+
 
 #[tokio::main]
 async fn main() {
@@ -21,11 +22,7 @@ async fn main() {
 
     // build our application with some routes
     let app = Router::new()
-        // post doesn't work on errors
-        // my code returns an error
-        .route("/", post(show_form))
-        .route("/upload", post(upload_image))
-        .route("/convert", post(convert_to))
+        .route("/", get(show_form).post(accept_form))
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(
             250 * 1024 * 1024, /* 250mb */
@@ -61,50 +58,26 @@ async fn show_form() -> Html<&'static str> {
     )
 }
 
-// upload the image
-//
-// convert it
-//
-//
-async fn upload_image(mut multipart: Multipart) -> Result<Html<String>, StatusCode> {
+async fn accept_form(mut multipart: Multipart) {
     while let Some(field) = multipart.next_field().await.unwrap() {
-        let content_type = field.content_type();
-        let bytes = field.bytes().await.unwrap()?;
-        let image_data = bytes.to_vec();
+        let name = field.name().unwrap().to_string();
+        let file_name = field.file_name().unwrap().to_string();
+        let content_type = field.content_type().unwrap().to_string();
+        let data = field.bytes().await.unwrap();
 
-        let mut headers = HeaderMap::new();
+        // reader unless it fails
+        let mut reader = ImageReader::new(Cursor::new(data));
+        let mut cursor = Cursor::new(&mut data);
+        // write reader to cursor of data
+        // or make a cursor before manually
+        reader.write_to(&cursor, image::ImageFormat::Png)?;
 
-        convert_to(image_data, content_type, &mut headers).expect("File missing or too big");
+        let bytes = cursor.into_inner().to_string();
 
-        return Ok(format!(
-                "Image successfully converted"
-        ));
 
-        Err(StatusCode::BAD_REQUEST)
-
-            }
-}
-
-async fn convert_to(content_type: &str, image_data: Vec<u8>, headermap: &HeaderMap) -> Result<Response<Vec<u8>>, image::ImageError> {
-    match content_type {
-        "image/png" => {
-            let mut png_data = Vec::new();
-
-            image_data.write_to(png_data, ImageFormat::Png)?;
-
-            headers.insert(content_type, HeaderValue::from_static("image/png"));
-            Ok(Response::new(png_data))
-        }
-
-        "image/jpeg" => {
-            let mut jpeg_data = Vec::new();
-            image_data.write_to(jpeg_data, ImageFormat::Jpeg)?;
-
-            headers.insert(content_type, HeaderValue::from_static("image/jpeg"));
-            Ok(Response::new(jpeg_data))
-        }
-        _            => {
-            eprintln!("File type not supported");
-        }
+        println!(
+            "Image Bytes: {}",
+          bytes
+        );
     }
 }
